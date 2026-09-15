@@ -1,0 +1,26 @@
+{
+  "name": "nmnb-discord-bot",
+  "version": "1.0.0",
+  "description": "연구 스크럼을 DM으로 수집하고 GPT로 통합해 Notion에 저장하는 Discord 봇",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test": "node --test test.js"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "research",
+    "scrum",
+    "notion"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "node-cron": "^3.0.3",
+    "dotenv": "^16.3.1"
+  }
+}

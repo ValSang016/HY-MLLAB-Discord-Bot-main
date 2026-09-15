@@ -1,0 +1,25 @@
+# 환경 변수
+.env
+.env.*
+!.env.example
+
+# Node modules
+node_modules/
+
+# 알림 데이터 (선택사항 - 배포 환경에 따라 다를 수 있음)
+reminders.json
+data/
+
+# 로그 파일
+*.log
+
+# OS 파일
+.DS_Store
+Thumbs.db
+
+# IDE 설정
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
