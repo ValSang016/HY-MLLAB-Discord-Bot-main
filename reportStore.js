@@ -93,10 +93,12 @@ export class ReportStore {
       now.getTime() >= Date.parse(window.openedAt) && now.getTime() < Date.parse(window.closesAt));
   }
 
-  beginCollection(participants, now = new Date()) {
+  beginCollection(participants, now = new Date(), closesAtOverride = null) {
     if (this.state.collection && this.isCollecting(this.state.collection.id, now)) return this.getCollection();
     if (this.state.submissions.length) throw new Error('이전 기간의 보고서가 아직 저장되지 않았습니다. /보고서생성으로 처리한 후 다음 수집을 시작하세요.');
-    const closesAt = nextOccurrence(this.state.deadline, now).toISOString();
+    const closesAtDate = closesAtOverride ? new Date(closesAtOverride) : nextOccurrence(this.state.deadline, now);
+    if (!Number.isFinite(closesAtDate.getTime()) || closesAtDate <= now) throw new Error('수집 마감은 현재보다 이후여야 합니다.');
+    const closesAt = closesAtDate.toISOString();
     const window = { id: randomUUID().replaceAll('-', '').slice(0, 12), openedAt: now.toISOString(), closesAt, closedAt: null, participants };
     this.commit({ ...this.state, collection: window });
     return structuredClone(window);

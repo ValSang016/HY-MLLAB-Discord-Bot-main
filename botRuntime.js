@@ -13,7 +13,7 @@ const rootDirectory = path.dirname(fileURLToPath(import.meta.url));
 export function readReportConfig(env = process.env) {
   const channelId = env.REPORT_CHANNEL_ID || env.BACKEND_CHANNEL_ID || env.MOBILE_CHANNEL_ID;
   if (!channelId || !/^\d{17,20}$/.test(channelId)) throw new Error('REPORT_CHANNEL_ID에 알림을 보낼 Discord 채널 ID를 설정하세요.');
-  for (const key of ['OPENAI_API_KEY', 'OPENAI_MODEL', 'NOTION_TOKEN']) {
+  for (const key of ['NOTION_TOKEN']) {
     if (!env[key]?.trim()) throw new Error(`${key}를 .env에 설정하세요.`);
   }
   const parentPageId = env.NOTION_PARENT_PAGE_ID?.trim();
@@ -27,8 +27,13 @@ export function readReportConfig(env = process.env) {
   return {
     channelId, guildId: env.DISCORD_GUILD_ID || null,
     dataDirectory: path.resolve(rootDirectory, env.DATA_DIR || 'data'),
-    openai: { apiKey: env.OPENAI_API_KEY, model: env.OPENAI_MODEL },
-    notion: { token: env.NOTION_TOKEN, parentPageId, dataSourceId, titleProperty: env.NOTION_TITLE_PROPERTY || 'Name' },
+    notion: {
+      token: env.NOTION_TOKEN,
+      parentPageId,
+      dataSourceId,
+      titleProperty: env.NOTION_TITLE_PROPERTY || 'Name',
+      outputUrl: env.NOTION_OUTPUT_URL?.trim() || null,
+    },
   };
 }
 
@@ -40,11 +45,12 @@ export async function createRuntime(client, config) {
   if (config.guildId && channel.guildId !== config.guildId) throw new Error('알림 채널과 DISCORD_GUILD_ID의 서버가 다릅니다.');
   const guildId = channel.guildId;
   const store = new ReportStore(path.join(config.dataDirectory, `reports-${guildId}.json`));
-  const notify = async content => {
+  const notify = async message => {
     const destination = await client.channels.fetch(config.channelId);
-    await destination.send({ content, allowedMentions: { parse: [] } });
+    const payload = typeof message === 'string' ? { content: message } : message;
+    await destination.send({ ...payload, allowedMentions: { parse: [] } });
   };
-  const service = new ReportService({ store, openai: config.openai, notion: config.notion, notify });
+  const service = new ReportService({ store, notion: config.notion, notify });
   const collection = new DmCollection(client, {
     dataDir: config.dataDirectory,
     allowedGuildId: guildId,
@@ -58,6 +64,13 @@ export async function createRuntime(client, config) {
   const scheduler = new ReportScheduler(store, async () => {
     const result = await collection.requestAll(guildId, { scheduled: true });
     console.log(`✅ 예약 DM: 성공 ${result.sent.length}명, 실패 ${result.failed.length}명`);
+    if (!result.sent.length && !result.failed.length) {
+      await notify('ℹ️ 등록된 수집 대상이 없어 예약 수집을 시작하지 않았습니다. /대상추가로 대상자를 등록하세요.');
+      return;
+    }
+    const window = store.getCollection();
+    const closesAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date(window.closesAt));
+    await notify(`📨 연구 스크럼 수집을 시작했습니다.\n마감: ${closesAt} (한국 시간)\nDM 성공 ${result.sent.length}명 / 실패 ${result.failed.length}명`);
     if (result.failed.length) await notify(`⚠️ 보고서 작성 DM을 ${result.failed.length}명에게 보내지 못했습니다. /대상목록과 DM 허용 설정을 확인하세요.`);
   }, { onError: error => console.error(`❌ 예약 DM 실패: ${error.message}`) });
   const deadlineScheduler = new ReportScheduler({ getSchedule: () => store.getDeadline(), setSchedule: value => store.setDeadline(value) }, async () => {
@@ -71,7 +84,7 @@ export async function createRuntime(client, config) {
     notify(`❌ 보고서 생성에 실패했습니다. 원문은 보관되어 있습니다.\n${error.message}`)
       .catch(() => console.error('실패 알림을 전송하지 못했습니다.'));
   } });
-  return { guildId, store, service, collection, scheduler, deadlineScheduler };
+  return { guildId, store, service, collection, scheduler, deadlineScheduler, notify };
 }
 
 export async function startRuntime(client, config, token) {

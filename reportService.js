@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { generateReport } from './reportGenerator.js';
 import { saveReportToNotion } from './notionClient.js';
 
 export function reportTitle(date, isTest) {
@@ -9,9 +8,33 @@ export function reportTitle(date, isTest) {
   return `${isTest ? '[TEST] ' : ''}연구 스크럼 · ${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
+function safeHeading(value) {
+  return String(value).replace(/[\r\n#]+/g, ' ').trim().slice(0, 80) || '이름 없음';
+}
+
+export function compileResearchScrum(submissions, missing = []) {
+  if (!submissions.length) throw new Error('수집 시간 안에 제출된 연구 스크럼이 없습니다.');
+  const respondentNames = submissions.map(item => safeHeading(item.authorName));
+  const missingNames = missing.map(item => safeHeading(item.name || item.userId));
+  const status = [
+    '# 연구 스크럼 취합',
+    '',
+    '## 응답 현황',
+    `- 응답 ${submissions.length}명: ${respondentNames.join(', ')}`,
+    `- 미응답 ${missing.length}명${missingNames.length ? `: ${missingNames.join(', ')}` : ''}`,
+  ];
+  const responses = submissions.flatMap(item => [
+    '',
+    `## ${safeHeading(item.authorName)}`,
+    '',
+    item.content.trim(),
+  ]);
+  return [...status, ...responses].join('\n');
+}
+
 export class ReportService {
-  constructor({ store, openai, notion, notify, recipients = () => [], generate = generateReport, save = saveReportToNotion, now = () => new Date() }) {
-    Object.assign(this, { store, openai, notion, notify, recipients, generate, save, now });
+  constructor({ store, notion, notify, recipients = () => [], save = saveReportToNotion, now = () => new Date() }) {
+    Object.assign(this, { store, notion, notify, recipients, save, now });
     this.running = false;
     this.needsReconciliation = false;
   }
@@ -30,8 +53,9 @@ export class ReportService {
       const title = reportTitle(now, isTest);
       const respondents = new Set(submissions.map(item => item.authorId));
       const missing = isTest ? [] : this.recipients().filter(person => !respondents.has(person.userId));
-      const report = await this.generate(submissions, this.openai);
-      const page = await this.save({ title, content: report, submissions, isTest, missing }, this.notion);
+      const report = compileResearchScrum(submissions, missing);
+      const page = await this.save({ title, content: report }, this.notion);
+      const outputUrl = this.notion.outputUrl || page.url;
       try {
         this.store.recordReport({ ...page, title, isTest, submissionIds: submissions.map(entry => entry.id) }, now);
       } catch {
@@ -41,11 +65,14 @@ export class ReportService {
       // Notion 저장/대기 목록 반영 후 알림. 알림 실패로 같은 보고서를 다시 만들지 않는다.
       let notificationError = null;
       try {
-        await this.notify(`${isTest ? '🧪 테스트' : '📝 팀'} 보고서가 Notion에 저장되었습니다.\n${page.url}`);
+        const notice = `${isTest ? '🧪 테스트' : '📝 팀'} 보고서가 Notion에 저장되었습니다.\n${outputUrl}`;
+        await this.notify(report.length <= 1700
+          ? `${notice}\n\n${report}`
+          : { content: `${notice}\n\n취합 내용은 첨부 파일에서 확인하세요.`, files: [{ attachment: Buffer.from(report, 'utf8'), name: 'research-scrum.txt' }] });
       } catch {
         notificationError = 'Notion 저장은 완료됐지만 Discord 알림 전송에 실패했습니다. 채널과 권한을 확인하세요.';
       }
-      return { ...page, title, notificationError, skipped: false };
+      return { ...page, url: outputUrl, title, notificationError, skipped: false };
     } finally {
       this.running = false;
     }

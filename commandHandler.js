@@ -1,9 +1,9 @@
 import { MessageFlags, PermissionFlagsBits } from 'discord.js';
 import { describeSchedule, parseWeekdays } from './reportStore.js';
 
-const COMMAND_NAMES = new Set(['테스트전송', '알림설정', '마감설정', '알림확인', '알림끄기', '보고서생성']);
+const COMMAND_NAMES = new Set(['테스트전송', '알림설정', '마감설정', '알림확인', '알림끄기', '보고서생성', '임의시작', '임의마감']);
 
-export function createCommandHandler({ guildId, store, scheduler, deadlineScheduler, service, collection, onError = console.error }) {
+export function createCommandHandler({ guildId, store, scheduler, deadlineScheduler, service, collection, notify, onError = console.error }) {
   return async interaction => {
     if (!interaction.isChatInputCommand() || !COMMAND_NAMES.has(interaction.commandName)) return;
     try {
@@ -20,9 +20,23 @@ export function createCommandHandler({ guildId, store, scheduler, deadlineSchedu
           message = result ? '본인에게 테스트 작성 DM을 보냈습니다. 입력한 내용으로 테스트 보고서를 Notion에 저장합니다. 정기 수집에는 반영되지 않습니다.' : '테스트 DM을 보낼 수 없습니다. DM 허용 설정을 확인하세요.';
           break;
         }
-        case '보고서생성': {
+        case '보고서생성':
+        case '임의마감': {
           const result = await service.run();
-          message = result.skipped ? result.reason : `보고서를 저장했습니다.\n${result.url}${result.notificationError ? `\n${result.notificationError}` : ''}`;
+          if (result.skipped && interaction.commandName === '임의마감') await notify(`ℹ️ 임의 수집을 마감했습니다. ${result.reason}`);
+          message = result.skipped ? result.reason : `보고서를 저장하고 보고 채널에 공지했습니다.\n${result.url}${result.notificationError ? `\n${result.notificationError}` : ''}`;
+          break;
+        }
+        case '임의시작': {
+          const active = store.getCollection();
+          if (active && store.isCollecting(active.id)) throw new Error('이미 수집 중입니다. 기존 요청을 다시 보내려면 /수집시작, 끝내려면 /임의마감을 사용하세요.');
+          const durationMinutes = interaction.options.getInteger('유효시간') ?? 180;
+          const result = await collection.requestAll(guildId, { durationMinutes });
+          if (!result.sent.length && !result.failed.length) throw new Error('등록된 수집 대상이 없습니다. 먼저 /대상추가를 사용하세요.');
+          const window = store.getCollection();
+          const closesAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date(window.closesAt));
+          await notify(`📨 임의 연구 스크럼 수집을 시작했습니다.\n마감: ${closesAt} (한국 시간)\nDM 성공 ${result.sent.length}명 / 실패 ${result.failed.length}명`);
+          message = `임의 수집을 시작하고 보고 채널에 공지했습니다.\n마감: ${closesAt} (한국 시간)\nDM 성공 ${result.sent.length}명 / 실패 ${result.failed.length}명`;
           break;
         }
         case '알림설정': {

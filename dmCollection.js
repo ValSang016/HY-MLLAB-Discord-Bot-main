@@ -95,11 +95,11 @@ export class DmCollection {
     const button = new ButtonBuilder().setCustomId(`${PREFIX}:o:${guild.id}:${recipient.userId}:${recipient.token}:${window.id}`)
       .setLabel(isTest ? '테스트 보고서 작성' : '보고서 작성').setStyle(ButtonStyle.Primary);
     await member.user.send({
-      content: `**${guild.name} — ${isTest ? '테스트 ' : ''}연구 스크럼 작성 요청**\n마감: ${stamp(window.closesAt)} (한국 시간)\n마감 시간 이후에는 답변을 저장하지 않습니다.\n제출 내용은 GPT로 통합해 Notion에 저장합니다.${isTest ? '\n이 테스트는 정기 수집과 별개이며 답변 즉시 테스트 보고서를 만듭니다.' : '\n마감 전 재제출하면 본인의 이전 답변을 교체합니다.'}\n\n${getResearchScrumTemplate()}`,
+      content: `**${guild.name} — ${isTest ? '테스트 ' : ''}연구 스크럼 작성 요청**\n마감: ${stamp(window.closesAt)} (한국 시간)\n마감 시간 이후에는 답변을 저장하지 않습니다.\n제출 내용은 작성자별 원문 그대로 취합해 Notion에 저장합니다.${isTest ? '\n이 테스트는 정기 수집과 별개이며 답변 즉시 테스트 보고서를 만듭니다.' : '\n마감 전 재제출하면 본인의 이전 답변을 교체합니다.'}\n\n${getResearchScrumTemplate()}`,
       components: [new ActionRowBuilder().addComponents(button)], allowedMentions: { parse: [] },
     });
   }
-  async requestAll(guildId, { scheduled = false } = {}) {
+  async requestAll(guildId, { scheduled = false, durationMinutes = null } = {}) {
     this.checkGuild(guildId);
     if (this.sending.has(guildId)) throw new Error('이미 DM 요청을 보내고 있습니다.');
     this.sending.add(guildId);
@@ -107,7 +107,12 @@ export class DmCollection {
       const store = this.reports(guildId);
       const recipients = this.recipients(guildId).list();
       if (!recipients.length) return { sent: [], failed: [] };
-      const window = scheduled ? store.beginCollection(recipients.map(({ userId, name }) => ({ userId, name })), this.now()) : store.getCollection();
+      const participants = recipients.map(({ userId, name }) => ({ userId, name }));
+      const window = scheduled
+        ? store.beginCollection(participants, this.now())
+        : durationMinutes
+          ? store.beginCollection(participants, this.now(), new Date(this.now().getTime() + durationMinutes * 60000))
+          : store.getCollection();
       if (!window || !store.isCollecting(window.id, this.now())) throw new Error('지금은 수집 시간이 아닙니다. 예약 시간에만 수집을 시작합니다.');
       const guild = await this.client.guilds.fetch(guildId);
       const result = { sent: [], failed: [] };
@@ -202,7 +207,7 @@ export class DmCollection {
         .setStyle(TextInputStyle.Paragraph).setMinLength(1).setMaxLength(4000).setRequired(true)
         .setPlaceholder('연구 목표, 진행 내용, 결과와 근거, 문제, 다음 계획을 작성해주세요.');
       const previous = !isTest && this.reports(guildId).getSubmissions().find(entry => entry.authorId === userId);
-      if (previous) input.setValue(previous.content);
+      input.setValue(previous?.content || getResearchScrumTemplate());
       const modal = new ModalBuilder().setCustomId(`rd:s:${guildId}:${userId}:${token}:${windowId}`).setTitle(isTest ? '테스트 연구 스크럼' : '연구 스크럼 작성')
         .addComponents(new ActionRowBuilder().addComponents(input));
       await interaction.showModal(modal);
@@ -214,6 +219,7 @@ export class DmCollection {
       if (!valid()) { await interaction.editReply('수집 시간이 끝났거나 대상에서 삭제되었습니다. 답변을 저장하지 않았습니다.'); return; }
       const content = interaction.fields.getTextInputValue('content').trim();
       if (!content || content.length > 4000) { await interaction.editReply('내용은 1~4,000자로 입력해주세요.'); return; }
+      if (content === getResearchScrumTemplate()) { await interaction.editReply('템플릿에 연구 내용을 작성한 뒤 제출해주세요.'); return; }
       const entry = { authorId: userId, authorName: member.displayName, content, collectionId: windowId };
       if (isTest) {
         if (!member.permissions.has(PermissionFlagsBits.ManageGuild)) throw new Error('서버 관리 권한이 필요합니다.');

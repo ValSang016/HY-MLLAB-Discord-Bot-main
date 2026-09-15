@@ -1,7 +1,7 @@
 {
   "name": "nmnb-discord-bot",
   "version": "1.0.0",
-  "description": "연구 스크럼을 DM으로 수집하고 GPT로 통합해 Notion에 저장하는 Discord 봇",
+  "description": "연구 스크럼을 DM으로 수집하고 작성자별로 취합해 Notion에 저장하는 Discord 봇",
   "main": "index.js",
   "type": "module",
   "scripts": {
