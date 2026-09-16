@@ -26,8 +26,11 @@ export function collectionCommands() {
 }
 
 export class RecipientStore {
-  constructor(filePath) {
+  constructor(filePath, { onPersist = null } = {}) {
     this.filePath = filePath;
+    this.onPersist = onPersist;
+    this.pendingPersistence = Promise.resolve();
+    this.persistenceError = null;
     this.recipients = fs.existsSync(filePath) ? JSON.parse(fs.readFileSync(filePath, 'utf8')) : [];
     if (!Array.isArray(this.recipients) || this.recipients.some(item =>
       !item || !/^\d+$/.test(item.userId) || typeof item.token !== 'string' || !/^[a-f0-9]{32}$/.test(item.token))) {
@@ -41,8 +44,23 @@ export class RecipientStore {
       fs.writeFileSync(temporary, JSON.stringify(recipients, null, 2), { encoding: 'utf8', mode: 0o600 });
       fs.renameSync(temporary, this.filePath);
       this.recipients = recipients;
+      if (this.onPersist) {
+        const snapshot = structuredClone(recipients);
+        this.pendingPersistence = this.pendingPersistence.then(() => this.onPersist(this.filePath, snapshot))
+          .then(() => { this.persistenceError = null; })
+          .catch(error => { this.persistenceError = error; });
+      }
     } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
   }
+  async flush() {
+    await this.pendingPersistence;
+    if (this.persistenceError && this.onPersist) {
+      this.persistenceError = null;
+      try { await this.onPersist(this.filePath, structuredClone(this.recipients)); }
+      catch (error) { this.persistenceError = error; throw error; }
+    }
+  }
+  async persistNow() { if (this.onPersist) await this.onPersist(this.filePath, structuredClone(this.recipients)); }
   list() { return structuredClone(this.recipients); }
   get(userId) { return this.list().find(item => item.userId === userId); }
   add(userId, name = userId) {
@@ -62,8 +80,8 @@ export class RecipientStore {
 
 export class DmCollection {
   constructor(client, { dataDir = process.env.DATA_DIR || DEFAULT_DATA_DIR, reportStoreForGuild, allowedGuildId,
-    onTestSubmitted, onError = console.error, now = () => new Date() } = {}) {
-    Object.assign(this, { client, dataDir, reportStoreForGuild, allowedGuildId, onTestSubmitted, onError, now });
+    onTestSubmitted, stateSync = null, onError = console.error, now = () => new Date() } = {}) {
+    Object.assign(this, { client, dataDir, reportStoreForGuild, allowedGuildId, onTestSubmitted, stateSync, onError, now });
     this.stores = new Map();
     this.reportStores = new Map();
     this.sending = new Set();
@@ -74,7 +92,10 @@ export class DmCollection {
   }
   recipients(guildId) {
     this.checkGuild(guildId);
-    if (!this.stores.has(guildId)) this.stores.set(guildId, new RecipientStore(path.join(this.dataDir, `recipients-${guildId}.json`)));
+    if (!this.stores.has(guildId)) {
+      const filePath = path.join(this.dataDir, `recipients-${guildId}.json`);
+      this.stores.set(guildId, new RecipientStore(filePath, { onPersist: this.stateSync ? (file, state) => this.stateSync.persist(file, state) : null }));
+    }
     return this.stores.get(guildId);
   }
   reports(guildId) {
@@ -113,6 +134,7 @@ export class DmCollection {
         : durationMinutes
           ? store.beginCollection(participants, this.now(), new Date(this.now().getTime() + durationMinutes * 60000))
           : store.getCollection();
+      await store.flush();
       if (!window || !store.isCollecting(window.id, this.now())) throw new Error('지금은 수집 시간이 아닙니다. 예약 시간에만 수집을 시작합니다.');
       const guild = await this.client.guilds.fetch(guildId);
       const result = { sent: [], failed: [] };
@@ -174,12 +196,15 @@ export class DmCollection {
     } else {
       const user = interaction.options.getUser('사용자', true);
       if (interaction.commandName === '대상삭제') {
-        await reply(store.remove(user.id) ? `<@${user.id}>을 삭제했습니다. 이전 DM 버튼도 무효화했습니다.` : '등록되지 않은 사용자입니다.');
+        const removed = store.remove(user.id);
+        await store.flush();
+        await reply(removed ? `<@${user.id}>을 삭제했습니다. 이전 DM 버튼도 무효화했습니다.` : '등록되지 않은 사용자입니다.');
         return;
       }
       if (user.bot) { await reply('봇 계정은 등록할 수 없습니다.'); return; }
       const member = await guild.members.fetch({ user: user.id, force: true });
       store.add(user.id, member.displayName);
+      await store.flush();
       await reply(`<@${user.id}>을 등록했습니다. 다음 예약 수집부터 개인 DM을 보냅니다.`);
     }
   }
@@ -228,7 +253,9 @@ export class DmCollection {
         const result = await this.onTestSubmitted(entry);
         await interaction.editReply({ content: `테스트 보고서를 저장했습니다.\n${result.url}${result.notificationError ? `\n${result.notificationError}` : ''}`, allowedMentions: { parse: [] } });
       } else {
-        this.reports(guildId).submit(entry, this.now());
+        const reportStore = this.reports(guildId);
+        reportStore.submit(entry, this.now());
+        await reportStore.flush();
         await interaction.editReply('답변을 저장했습니다. 마감 전에는 같은 버튼으로 수정할 수 있습니다. 마감 후 답변은 저장하지 않습니다.');
       }
     }

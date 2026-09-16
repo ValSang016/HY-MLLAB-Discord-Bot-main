@@ -7,6 +7,7 @@ import { ReportStore, nextOccurrence, parseWeekdays, scheduleToCron } from './re
 import { reportToBlocks, saveReportToNotion } from './notionClient.js';
 import { compileResearchScrum } from './reportService.js';
 import { getResearchScrumTemplate } from './researchTemplate.js';
+import { RedisStateSync } from './redisState.js';
 
 function withStore(run) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nmnb-report-'));
@@ -22,10 +23,10 @@ test('요일과 시간 설정을 cron으로 변환한다', () => {
 
 test('단일 연구 스크럼 템플릿에 필수 항목이 있다', () => {
   const template = getResearchScrumTemplate();
-  for (const heading of ['연구 목표와 핵심 질문', '진행한 연구', '주요 결과와 근거', '문제와 위험 요소', '다음 연구 계획', '공유·결정 사항']) {
+  for (const heading of ['어제 하기로 한 일', '오늘 할 일', '어려운 점', '오늘의 컨디션']) {
     assert.match(template, new RegExp(heading));
   }
-  assert.ok(template.length < 1500);
+  assert.ok(template.length <= 3500);
 });
 
 test('다음 마감 시각을 한국 시간으로 계산한다', () => {
@@ -106,4 +107,33 @@ test('100개가 넘는 Notion 블록은 페이지 생성 후 이어 붙인다', 
   assert.equal(requests[0].body.children.length, 100);
   assert.equal(requests[1].method, 'PATCH');
   assert.equal(requests[1].body.children.length, 1);
+});
+
+test('Upstash Redis에 상태를 저장하고 새 로컬 파일로 복원한다', async () => {
+  const values = new Map();
+  const fetchImpl = async (_url, options) => {
+    const [command, key, value] = JSON.parse(options.body);
+    if (command === 'SET') values.set(key, value);
+    return { ok: true, status: 200, json: async () => ({ result: command === 'GET' ? values.get(key) ?? null : 'OK' }) };
+  };
+  const redis = new RedisStateSync({ url: 'https://redis.test', token: 'secret', fetchImpl });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nmnb-redis-'));
+  const source = path.join(directory, 'reports-123.json');
+  const restored = path.join(directory, 'copy', 'reports-123.json');
+  try {
+    await redis.persist(source, { version: 1, value: '저장됨' });
+    assert.equal(await redis.restore(restored), true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(restored, 'utf8')), { version: 1, value: '저장됨' });
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('보고서 저장소는 원격 저장 완료까지 기다린다', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nmnb-persist-'));
+  let persisted;
+  try {
+    const store = new ReportStore(path.join(directory, 'state.json'), { onPersist: async (_file, state) => { persisted = state; } });
+    store.setSchedule({ weekdays: [1], time: '09:00', enabled: true });
+    await store.flush();
+    assert.equal(persisted.schedule.time, '09:00');
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

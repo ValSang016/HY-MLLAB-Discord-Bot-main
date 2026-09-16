@@ -7,6 +7,7 @@ import { ReportService } from './reportService.js';
 import { DmCollection } from './dmCollection.js';
 import { createCommandHandler } from './commandHandler.js';
 import { registerCommandsToGuild } from './commandRegister.js';
+import { RedisStateSync } from './redisState.js';
 
 const rootDirectory = path.dirname(fileURLToPath(import.meta.url));
 
@@ -24,6 +25,10 @@ export function readReportConfig(env = process.env) {
   if (![parentPageId, dataSourceId].filter(Boolean).every(id => /^(?:[a-f\d]{32}|[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12})$/i.test(id))) {
     throw new Error('Notion 저장 위치에는 URL이 아닌 페이지/데이터 소스 ID를 입력하세요.');
   }
+  const redisUrl = env.UPSTASH_REDIS_REST_URL?.trim();
+  const redisToken = env.UPSTASH_REDIS_REST_TOKEN?.trim();
+  if (Boolean(redisUrl) !== Boolean(redisToken)) throw new Error('UPSTASH_REDIS_REST_URL과 UPSTASH_REDIS_REST_TOKEN을 함께 설정하세요.');
+  if (redisUrl && !/^https:\/\//i.test(redisUrl)) throw new Error('UPSTASH_REDIS_REST_URL은 https:// 주소여야 합니다.');
   return {
     channelId, guildId: env.DISCORD_GUILD_ID || null,
     dataDirectory: path.resolve(rootDirectory, env.DATA_DIR || 'data'),
@@ -34,6 +39,7 @@ export function readReportConfig(env = process.env) {
       titleProperty: env.NOTION_TITLE_PROPERTY || 'Name',
       outputUrl: env.NOTION_OUTPUT_URL?.trim() || null,
     },
+    redis: redisUrl ? { url: redisUrl, token: redisToken } : null,
   };
 }
 
@@ -44,7 +50,18 @@ export async function createRuntime(client, config) {
   }
   if (config.guildId && channel.guildId !== config.guildId) throw new Error('알림 채널과 DISCORD_GUILD_ID의 서버가 다릅니다.');
   const guildId = channel.guildId;
-  const store = new ReportStore(path.join(config.dataDirectory, `reports-${guildId}.json`));
+  const reportFile = path.join(config.dataDirectory, `reports-${guildId}.json`);
+  const recipientFile = path.join(config.dataDirectory, `recipients-${guildId}.json`);
+  const stateSync = config.redis ? new RedisStateSync(config.redis) : null;
+  let reportRestored = false;
+  let recipientsRestored = false;
+  if (stateSync) {
+    [reportRestored, recipientsRestored] = await Promise.all([stateSync.restore(reportFile), stateSync.restore(recipientFile)]);
+    console.log('✅ Upstash Redis 상태 저장 연결 완료');
+  } else {
+    console.warn('⚠️ Upstash Redis 미설정: 로컬 JSON에만 저장합니다. 무료 클라우드 재시작 시 데이터가 사라질 수 있습니다.');
+  }
+  const store = new ReportStore(reportFile, { onPersist: stateSync ? (file, state) => stateSync.persist(file, state) : null });
   const notify = async message => {
     const destination = await client.channels.fetch(config.channelId);
     const payload = typeof message === 'string' ? { content: message } : message;
@@ -59,7 +76,13 @@ export async function createRuntime(client, config) {
       return store;
     },
     onTestSubmitted: async entry => service.run({ isTest: true, ...entry }),
+    stateSync,
   });
+  const recipientStore = collection.recipients(guildId);
+  if (stateSync) {
+    if (!reportRestored) await store.persistNow();
+    if (!recipientsRestored) await recipientStore.persistNow();
+  }
   service.recipients = () => store.getCollection()?.participants || [];
   const scheduler = new ReportScheduler(store, async () => {
     const result = await collection.requestAll(guildId, { scheduled: true });
@@ -73,7 +96,7 @@ export async function createRuntime(client, config) {
     await notify(`📨 연구 스크럼 수집을 시작했습니다.\n마감: ${closesAt} (한국 시간)\nDM 성공 ${result.sent.length}명 / 실패 ${result.failed.length}명`);
     if (result.failed.length) await notify(`⚠️ 보고서 작성 DM을 ${result.failed.length}명에게 보내지 못했습니다. /대상목록과 DM 허용 설정을 확인하세요.`);
   }, { onError: error => console.error(`❌ 예약 DM 실패: ${error.message}`) });
-  const deadlineScheduler = new ReportScheduler({ getSchedule: () => store.getDeadline(), setSchedule: value => store.setDeadline(value) }, async () => {
+  const deadlineScheduler = new ReportScheduler({ getSchedule: () => store.getDeadline(), setSchedule: value => store.setDeadline(value), flush: () => store.flush() }, async () => {
     const window = store.getCollection();
     if (!window || new Date() < new Date(window.closesAt)) return;
     const result = await service.run();

@@ -12,7 +12,7 @@ Discord에서 연구 구성원의 스크럼을 정해진 시간 동안 수집하
 
 수집 시작 전이나 마감 이후에 제출한 답변은 저장하지 않습니다. 이전 수집 기간의 버튼도 사용할 수 없습니다. 마감 전에는 같은 버튼으로 자신의 답변을 수정할 수 있습니다.
 
-연구 스크럼 양식은 [templates/research-scrum.md](templates/research-scrum.md) 하나를 사용합니다. 새 입력창에도 같은 양식이 기본으로 채워집니다.
+연구 스크럼 양식은 [templates/research-scrum.md](templates/research-scrum.md) 하나를 사용합니다. 새 입력창에도 같은 양식이 기본으로 채워지며, 파일을 바꾸면 다음 DM 또는 입력창부터 다시 읽습니다.
 
 ## 요구 사항
 
@@ -39,6 +39,9 @@ NOTION_PARENT_PAGE_ID=
 NOTION_DATA_SOURCE_ID=
 NOTION_TITLE_PROPERTY=Name
 NOTION_OUTPUT_URL=
+
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
 
 DATA_DIR=./data
 PORT=3000
@@ -111,12 +114,10 @@ npm run dev
 
 ## 연구 스크럼 항목
 
-- 연구 목표와 핵심 질문
-- 진행한 연구
-- 주요 결과와 근거
-- 문제와 위험 요소
-- 다음 연구 계획
-- 공유·결정 사항
+- 어제 하기로 한 일
+- 오늘 할 일
+- 어려운 점
+- 오늘의 컨디션
 
 답변은 요약하거나 재작성하지 않고 작성자별 원문 그대로 저장합니다. 응답자와 미응답자는 Notion 보고서의 응답 현황에 기록됩니다.
 수집 시작은 보고 채널에 공지됩니다. 보고서가 생성되면 Notion 링크와 취합 본문도 같은 채널에 게시되며, Discord 메시지 길이를 넘는 본문은 `research-scrum.txt` 파일로 첨부됩니다.
@@ -138,6 +139,28 @@ Discord와 Notion을 실제로 연결하는 테스트는 봇 실행 후 `/테스
 민감한 값이 포함된 `.env`와 수집 데이터가 들어 있는 `data/`는 Git에서 제외됩니다. 동일한 `DATA_DIR`을 여러 봇 프로세스가 동시에 사용하지 마세요.
 
 HTTP 상태 확인 엔드포인트는 `PORT`에서 동작하며 Discord 연결과 런타임 준비가 완료되면 `200 OK`, 준비되지 않으면 `503 NOT READY`를 반환합니다.
+
+### Render 배포
+
+저장소 루트의 `render.yaml`을 사용해 Render에서 **Blueprint**를 생성하면 Node Web Service와 필요한 환경 변수 이름을 자동으로 인식합니다. `sync: false`로 선언된 다음 값은 최초 생성 화면에서 직접 입력합니다.
+
+- `DISCORD_TOKEN`
+- `REPORT_CHANNEL_ID`
+- `NOTION_TOKEN`
+- `NOTION_DATA_SOURCE_ID`
+- `NOTION_TITLE_PROPERTY`
+- `UPSTASH_REDIS_REST_URL`
+- `UPSTASH_REDIS_REST_TOKEN`
+
+기존 Web Service를 직접 만들었다면 서비스의 **Environment → Add from .env**를 눌러 로컬 `.env` 내용을 붙여 넣고 저장 및 재배포합니다. `.env` 파일 자체는 Git에 올리지 않습니다. Render가 제공하는 `PORT`는 자동으로 사용하므로 따로 입력하지 않아도 됩니다.
+
+무료 Render Web Service의 파일 시스템은 재배포, 재시작 또는 절전 후 초기화됩니다. Upstash Redis의 REST URL과 Standard 토큰을 설정하면 대상자, 일정, 수집 답변과 보고서 기록을 Redis에 함께 저장하고 시작할 때 복원합니다. 두 값을 비워 두면 로컬 JSON 저장만 사용합니다.
+
+1. [Upstash Console](https://console.upstash.com/)에서 무료 Redis 데이터베이스를 만듭니다.
+2. 데이터베이스의 REST API 영역에서 `UPSTASH_REDIS_REST_URL`과 쓰기 가능한 `UPSTASH_REDIS_REST_TOKEN`을 복사합니다.
+3. Render의 Environment에 같은 이름으로 등록하고 재배포합니다.
+
+Redis를 처음 연결했을 때 저장된 원격 상태가 없으면 현재 로컬 상태를 최초 값으로 올립니다. 이후 변경은 로컬 파일과 Redis에 모두 기록되며, Redis 저장 실패 시 명령도 실패로 표시됩니다. Standard 토큰은 Git이나 Discord에 올리지 않습니다.
 
 ## 문제 해결
 

@@ -45,7 +45,10 @@ export class ReportService {
     this.running = true;
     try {
       const now = this.now();
-      if (!isTest) this.store.closeCollection(now);
+      if (!isTest) {
+        this.store.closeCollection(now);
+        await this.store.flush();
+      }
       const submissions = content?.trim()
         ? [{ id: randomUUID(), authorId, authorName, content: content.trim(), createdAt: now.toISOString() }]
         : this.store.getSubmissions();
@@ -58,6 +61,7 @@ export class ReportService {
       const outputUrl = this.notion.outputUrl || page.url;
       try {
         this.store.recordReport({ ...page, title, isTest, submissionIds: submissions.map(entry => entry.id) }, now);
+        await this.store.flush();
       } catch {
         this.needsReconciliation = true;
         throw new Error(`Notion에는 저장했지만 로컬 기록에 실패했습니다. 중복 생성을 막기 위해 실행을 중지했습니다: ${page.url}`);

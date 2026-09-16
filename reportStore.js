@@ -53,8 +53,11 @@ export function nextOccurrence(schedule, after = new Date()) {
 
 // 한 봇 프로세스가 사용하는 저장소. 임시 파일을 완성한 후 교체한다.
 export class ReportStore {
-  constructor(filePath) {
+  constructor(filePath, { onPersist = null } = {}) {
     this.filePath = filePath;
+    this.onPersist = onPersist;
+    this.pendingPersistence = Promise.resolve();
+    this.persistenceError = null;
     this.state = { version: 1, schedule: structuredClone(DEFAULT_SCHEDULE), deadline: structuredClone(DEFAULT_DEADLINE), collection: null, submissions: [], reports: [] };
     if (fs.existsSync(filePath)) {
       const state = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -70,6 +73,27 @@ export class ReportStore {
     }
   }
 
+  queuePersistence() {
+    if (!this.onPersist) return;
+    const snapshot = structuredClone(this.state);
+    this.pendingPersistence = this.pendingPersistence.then(() => this.onPersist(this.filePath, snapshot))
+      .then(() => { this.persistenceError = null; })
+      .catch(error => { this.persistenceError = error; });
+  }
+
+  async flush() {
+    await this.pendingPersistence;
+    if (this.persistenceError && this.onPersist) {
+      this.persistenceError = null;
+      try { await this.onPersist(this.filePath, structuredClone(this.state)); }
+      catch (error) { this.persistenceError = error; throw error; }
+    }
+  }
+
+  async persistNow() {
+    if (this.onPersist) await this.onPersist(this.filePath, structuredClone(this.state));
+  }
+
   commit(next) {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     const temporaryPath = `${this.filePath}.${randomUUID()}.tmp`;
@@ -77,6 +101,7 @@ export class ReportStore {
       fs.writeFileSync(temporaryPath, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
       fs.renameSync(temporaryPath, this.filePath);
       this.state = next;
+      this.queuePersistence();
     } finally {
       if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
     }

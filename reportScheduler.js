@@ -23,11 +23,12 @@ export class ReportScheduler {
     this.task?.start();
   }
 
-  update(schedule) {
+  async update(schedule) {
     const next = validateSchedule(schedule);
     const nextTask = this.createTask(next);
     try {
       this.store.setSchedule(next);
+      await this.store.flush?.();
     } catch (error) {
       nextTask?.stop();
       throw error;

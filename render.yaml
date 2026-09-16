@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: nmnb-discord-bot
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: REPORT_CHANNEL_ID
+        sync: false
+      - key: NOTION_TOKEN
+        sync: false
+      - key: NOTION_DATA_SOURCE_ID
+        sync: false
+      - key: NOTION_TITLE_PROPERTY
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: NOTION_OUTPUT_URL
+        value: "https://tricky-macaroon-2ff.notion.site/3dcf6dc3a54a803682c8cee14a0acad7?v=3dcf6dc3a54a80d08069000c962d28bb&source=copy_link"
+      - key: DATA_DIR
+        value: ./data
