@@ -13,6 +13,7 @@ const DEFAULT_DATA_DIR = fileURLToPath(new URL('./data/', import.meta.url));
 const PREFIX = 'rd';
 const names = new Set(['대상추가', '대상삭제', '대상목록', '수집시작']);
 const stamp = date => new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date(date));
+const discordTime = date => Math.floor(new Date(date).getTime() / 1000);
 
 export function collectionCommands() {
   return [
@@ -116,7 +117,7 @@ export class DmCollection {
     const button = new ButtonBuilder().setCustomId(`${PREFIX}:o:${guild.id}:${recipient.userId}:${recipient.token}:${window.id}`)
       .setLabel(isTest ? '테스트 보고서 작성' : '보고서 작성').setStyle(ButtonStyle.Primary);
     await member.user.send({
-      content: `**${guild.name} — ${isTest ? '테스트 ' : ''}연구 스크럼 작성 요청**\n마감: ${stamp(window.closesAt)} (한국 시간)\n마감 시간 이후에는 답변을 저장하지 않습니다.\n제출 내용은 작성자별 원문 그대로 취합해 Notion에 저장합니다.${isTest ? '\n이 테스트는 정기 수집과 별개이며 답변 즉시 테스트 보고서를 만듭니다.' : '\n마감 전 재제출하면 본인의 이전 답변을 교체합니다.'}\n\n${getResearchScrumTemplate()}`,
+      content: `**${guild.name} — ${isTest ? '테스트 ' : ''}연구 스크럼 작성 요청**\n\n⏰ **제출 마감:** <t:${discordTime(window.closesAt)}:F> · <t:${discordTime(window.closesAt)}:R>\n한국 시간: ${stamp(window.closesAt)}\n마감 시간 이후에는 답변을 저장하지 않습니다.\n제출 내용은 작성자별 원문 그대로 취합해 Notion에 저장합니다.${isTest ? '\n이 테스트는 정기 수집과 별개이며 답변 즉시 테스트 보고서를 만듭니다.' : '\n마감 전 재제출하면 본인의 이전 답변을 교체합니다.'}\n\n${getResearchScrumTemplate()}`,
       components: [new ActionRowBuilder().addComponents(button)], allowedMentions: { parse: [] },
     });
   }
